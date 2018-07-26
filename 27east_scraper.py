@@ -2,8 +2,10 @@ import re
 import csv
 import urllib2
 import datetime
+import psycopg2
 
 from lxml import etree
+from mailchimp3 import MailChimp
 
 FIELDS = [
     'page title',
@@ -14,6 +16,8 @@ FIELDS = [
     'desc'
 ]
 
+client = MailChimp(mc_api=settings.MC_API_KEY, mc_user=settings.MC_USER_NAME)
+
 def get_email(txt):
     match_email = re.search(r'[\w\.-]+@[\w-]+\.[\w-]+', txt)
     return match_email.group(0) if match_email else ''
@@ -21,6 +25,11 @@ def get_email(txt):
 def get_phone(txt):
     match_phone = re.search(r'(\d{3}[-\.\s]??\d{3}[-\.\s]??\d{4}|\(\d{3}\)\s*\d{3}[-\.\s]??\d{4}|\d{3}[-\.\s]??\d{4})', txt)
     return match_phone.group(0) if match_phone else ''
+
+def get_db_connection():
+    connect_str = "dbname='27east' user='twodo_user' host='localhost' password='f2#2$2D@3'"
+    conn = psycopg2.connect(connect_str)
+    return conn
 
 def main(urls):
     ts = datetime.datetime.now().strftime('%m/%d/%Y %H:%M:%S')
@@ -37,10 +46,6 @@ def main(urls):
         contents = [ii.strip() for ii in tree.xpath(xpath) if len(ii.strip()) > 1]
         xpath = '//*[@id="yui-main"]/div/div/div[1]/div[4]/div[2]//text()'
         contents += [ii.strip() for ii in tree.xpath(xpath) if len(ii.strip()) > 1]
-
-        # with open('res2.txt', 'w') as f:
-        #     for ii in contents:
-        #         f.write(ii.encode('ascii', 'ignore')+'\n')
 
         # 2. separate articles
         desc = ''
@@ -83,6 +88,27 @@ def main(urls):
         w.writeheader()
         for ii in articles:
             w.writerow(ii)
+
+    # create mailchimp list
+    try:
+        llist = client.lists.create(data={})
+        client.lists.members.create(llist['id'], {
+            'email_address': request.data['email'],
+            'status': 'subscribed'
+        })
+    except Exception as e:
+        pass
+
+    # store in database
+    conn = get_db_connection()
+
+    with conn.cursor() as cursor:
+        values = []
+        sql = "INSERT INTO properties ( %s ) VALUES ( %s ) ON CONFLICT DO NOTHING" % (columns, placeholders)
+        for ii in res:
+            values.append(tuple(ii.values()))
+            ids.append(ii['id'].split('_')[-1])
+        cursor.executemany(sql, values)
 
 if __name__ == "__main__":
     urls = [
