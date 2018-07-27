@@ -3,20 +3,21 @@ import csv
 import urllib2
 import datetime
 import psycopg2
+import config
 
 from lxml import etree
 from mailchimp3 import MailChimp
 
 FIELDS = [
-    'page title',
+    'page_title',
     'timestamp',
     'label',
     'email',
     'phone',
-    'desc'
+    'description'
 ]
 
-client = MailChimp(mc_api=settings.MC_API_KEY, mc_user=settings.MC_USER_NAME)
+client = MailChimp(mc_api=config.MC_API_KEY, mc_user=config.MC_USER_NAME)
 
 def get_email(txt):
     match_email = re.search(r'[\w\.-]+@[\w-]+\.[\w-]+', txt)
@@ -27,17 +28,18 @@ def get_phone(txt):
     return match_phone.group(0) if match_phone else ''
 
 def get_db_connection():
-    connect_str = "dbname='27east' user='twodo_user' host='localhost' password='f2#2$2D@3'"
+    connect_str = "dbname='east27' user='twodo_user' host='localhost' password='f2#2$2D@3'"
     conn = psycopg2.connect(connect_str)
     return conn
 
 def main(urls):
+    base_url = 'http://www.27east.com/hamptons-classifieds/index.cfm/'
     ts = datetime.datetime.now().strftime('%m/%d/%Y %H:%M:%S')
     filename = datetime.datetime.now().strftime('%Y-%m-%dT%H.%M.%S.csv')
 
     articles = []
     for url in urls:
-        response = urllib2.urlopen(url)
+        response = urllib2.urlopen(base_url+url)
         htmlparser = etree.HTMLParser()
         tree = etree.parse(response, htmlparser)
 
@@ -48,13 +50,13 @@ def main(urls):
         contents += [ii.strip() for ii in tree.xpath(xpath) if len(ii.strip()) > 1]
 
         # 2. separate articles
-        desc = ''
+        description = ''
 
         ii = 0
 
         # consider website too
         while ii < len(contents):
-            desc += contents[ii] + '\n'
+            description += contents[ii] + '\n'
             email = get_email(contents[ii])
             phone = get_phone(contents[ii])
 
@@ -63,39 +65,66 @@ def main(urls):
                     email = email if email else get_email(contents[ii+1])
                     phone = phone if phone else get_phone(contents[ii+1])
                     ii = ii + 1
-                    desc += contents[ii] + '\n'
+                    description += contents[ii] + '\n'
                 elif ii < len(contents)-2 and len(contents[ii+1]+contents[ii+2]) < 50 and ((get_email(contents[ii+1]+contents[ii+2]) and phone) or (get_phone(contents[ii+1]+contents[ii+2]) and email)):
                     email = email if email else get_email(contents[ii+1]+contents[ii+2])
                     phone = phone if phone else get_phone(contents[ii+1]+contents[ii+2])
                     ii = ii + 2
-                    desc += contents[ii-1] + '\n'
-                    desc += contents[ii] + '\n'
+                    description += contents[ii-1] + '\n'
+                    description += contents[ii] + '\n'
 
-                match_label = re.search(r'^[A-Z\s,/\*-]{2,}[\s,-]+', desc)
+                match_label = re.search(r'^[A-Z\s,/\*-]{2,}[\s,-]+', description)
                 articles.append({
-                    'desc': desc.encode('ascii', 'ignore'),
+                    'description': description.encode('ascii', 'ignore'),
                     'email': email.encode('ascii', 'ignore'),
                     'phone': phone.encode('ascii', 'ignore'),
                     'label': match_label.group(0).replace('\n', ' ').strip().strip('-').encode('ascii', 'ignore') if match_label else '',
-                    'page title': url.split('/')[-1],
+                    'page_title': url.split('/')[-1],
                     'timestamp': ts
                 })
-                desc = ''
+                description = ''
             ii = ii + 1
 
-    with open(filename, 'wb') as f:  # Just use 'w' mode in 3.x
-        w = csv.DictWriter(f, FIELDS)
-        w.writeheader()
-        for ii in articles:
-            w.writerow(ii)
+    # with open(filename, 'wb') as f:  # Just use 'w' mode in 3.x
+    #     w = csv.DictWriter(f, FIELDS)
+    #     w.writeheader()
+    #     for ii in articles:
+    #         w.writerow(ii)
 
-    # create mailchimp list
+    # create mailchimp list and add members
     try:
-        llist = client.lists.create(data={})
-        client.lists.members.create(llist['id'], {
-            'email_address': request.data['email'],
-            'status': 'subscribed'
-        })
+        list_data = {
+            'name': datetime.datetime.now().strftime('east27-%m-%d-%Y'),
+            'contact': {
+                'company': 'Hamptons Job Board',
+                'address1': 'Main Street',
+                'city': 'East Hampton',
+                'state': 'New York',
+                'zip': '11937',
+                'country': 'USA'
+            },
+            'email_type_option': True,
+            'permission_reminder': 'Hamptons Job Board: Start Listing For Free Today!',
+            'campaign_defaults': {
+                'from_name': 'Hamptons Job Board',
+                'from_email': 'info@hamptonsjobboard.com',
+                'subject': 'Hamptons Job Board',
+                'language': 'English'
+            }
+        }
+
+        llist = client.lists.create(data=list_data)
+        for ii in articles:
+            if ii['email']:
+                client.lists.members.create(llist['id'], {
+                    'email_address': ii['email'],
+                    'status': 'subscribed',
+                    'merge_fields': {
+                        'PHONE': ii['phone'],
+                        'ADTITLE': ii['label'],
+                        'PAGETITLE': ii['page_title'] 
+                    },
+                })
     except Exception as e:
         pass
 
@@ -104,25 +133,27 @@ def main(urls):
 
     with conn.cursor() as cursor:
         values = []
-        sql = "INSERT INTO properties ( %s ) VALUES ( %s ) ON CONFLICT DO NOTHING" % (columns, placeholders)
-        for ii in res:
+        columns = ', '.join(articles[0].keys())
+        placeholders = ', '.join(['%s'] * len(articles[0]))
+
+        sql = "INSERT INTO ad ( %s ) VALUES ( %s ) ON CONFLICT DO NOTHING" % (columns, placeholders)
+        for ii in articles:
             values.append(tuple(ii.values()))
-            ids.append(ii['id'].split('_')[-1])
         cursor.executemany(sql, values)
 
 if __name__ == "__main__":
     urls = [
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1220/Help-Wanted/Home-Health-Care',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1235/Help-Wanted/Office-Professional',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1205/Help-Wanted/Building-Trades',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1210/Help-Wanted/Child-Care',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1215/Help-Wanted/Domestic',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1225/Help-Wanted/Food-Drink',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1255/Help-Wanted/General',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1220/Help-Wanted/Home-Health-Care',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1230/Help-Wanted/Landscape-Garden',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1235/Help-Wanted/Office-Professional',
-        'http://www.27east.com/hamptons-classifieds/index.cfm/1245/Help-Wanted/Retail',
+        '/1220/Help-Wanted/Home-Health-Care',
+        '/1235/Help-Wanted/Office-Professional',
+        '/1205/Help-Wanted/Building-Trades',
+        '/1210/Help-Wanted/Child-Care',
+        '/1215/Help-Wanted/Domestic',
+        '/1225/Help-Wanted/Food-Drink',
+        '/1255/Help-Wanted/General',
+        '/1220/Help-Wanted/Home-Health-Care',
+        '/1230/Help-Wanted/Landscape-Garden',
+        '/1235/Help-Wanted/Office-Professional',
+        '/1245/Help-Wanted/Retail',
     ]
 
     main(urls)
