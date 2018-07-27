@@ -4,6 +4,7 @@ import urllib2
 import datetime
 import psycopg2
 import config
+import pdb
 
 from lxml import etree
 from mailchimp3 import MailChimp
@@ -85,6 +86,7 @@ def main(urls):
                 description = ''
             ii = ii + 1
 
+    # save csv file
     # with open(filename, 'wb') as f:  # Just use 'w' mode in 3.x
     #     w = csv.DictWriter(f, FIELDS)
     #     w.writeheader()
@@ -92,54 +94,60 @@ def main(urls):
     #         w.writerow(ii)
 
     # create mailchimp list and add members
-    # try:
-    list_data = {
-        'name': datetime.datetime.now().strftime('east27-%m-%d-%Y'),
-        'contact': {
-            'company': 'Hamptons Job Board',
-            'address1': 'Main Street',
-            'city': 'East Hampton',
-            'state': 'New York',
-            'zip': '11937',
-            'country': 'USA'
-        },
-        'email_type_option': True,
-        'permission_reminder': 'Hamptons Job Board: Start Listing For Free Today!',
-        'campaign_defaults': {
-            'from_name': 'Hamptons Job Board',
-            'from_email': 'info@hamptonsjobboard.com',
-            'subject': 'Hamptons Job Board',
-            'language': 'English'
+    try:
+        list_data = {
+            'name': datetime.datetime.now().strftime('east27-%m-%d-%Y'),
+            'contact': {
+                'company': 'Hamptons Job Board',
+                'address1': 'Main Street',
+                'city': 'East Hampton',
+                'state': 'New York',
+                'zip': '11937',
+                'country': 'USA'
+            },
+            'email_type_option': True,
+            'permission_reminder': 'Hamptons Job Board: Start Listing For Free Today!',
+            'campaign_defaults': {
+                'from_name': 'Hamptons Job Board',
+                'from_email': 'info@hamptonsjobboard.com',
+                'subject': 'Hamptons Job Board',
+                'language': 'English'
+            }
         }
-    }
 
-    llist = client.lists.create(data=list_data)
+        llist = client.lists.create(data=list_data)
 
-    # create merge fields for the list
-    for ii in ['PAGETITLE', 'ADTITLE']:
-        client.lists.merge_fields.create(list_id=llist['id'], data={
-            'name': ii,
-            'tag': ii,
-            'type': 'text'
-        })
-
-    for ii in articles:
-        if ii['email']:
-            client.lists.members.create(llist['id'], {
-                'email_address': ii['email'],
-                'status': 'subscribed',
-                'merge_fields': {
-                    'PHONE': ii['phone'],
-                    'ADTITLE': ii['label'],
-                    'PAGETITLE': ii['page_title'] 
-                },
+        # create merge fields for the list
+        for ii in ['PAGETITLE', 'ADTITLE']:
+            client.lists.merge_fields.create(list_id=llist['id'], data={
+                'name': ii,
+                'tag': ii,
+                'type': 'text'
             })
-    # except Exception as e:
-    #     pass
+
+        emails = []
+        for ii in articles:
+            if ii['email'] and ii['email'] not in emails:
+                print (ii)
+                emails.append(ii['email'])
+                try:
+                    client.lists.members.create(llist['id'], {
+                        'email_address': ii['email'],
+                        'status': 'subscribed',
+                        'merge_fields': {
+                            'PHONE': ii['phone'],
+                            'ADTITLE': ii['label'],
+                            'PAGETITLE': ii['page_title'] 
+                        },
+                    })
+                except:
+                    print ('------------------------------------')
+    except Exception as e:
+        pass
 
     # store in database
     conn = get_db_connection()
-
+    # pdb.set_trace()
     with conn.cursor() as cursor:
         values = []
         columns = ', '.join(articles[0].keys())
@@ -148,7 +156,9 @@ def main(urls):
         sql = "INSERT INTO ad ( %s ) VALUES ( %s )" % (columns, placeholders)
         for ii in articles:
             values.append(tuple(ii.values()))
+
         cursor.executemany(sql, values)
+        conn.commit()
 
 if __name__ == "__main__":
     urls = [
