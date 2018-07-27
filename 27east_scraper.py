@@ -80,7 +80,7 @@ def main(urls):
                     'phone': phone.encode('ascii', 'ignore'),
                     'label': match_label.group(0).replace('\n', ' ').strip().strip('-').encode('ascii', 'ignore') if match_label else '',
                     'page_title': url.split('/')[-1],
-                    'timestamp': ts
+                    'timestamp': datetime.datetime.now()
                 })
                 description = ''
             ii = ii + 1
@@ -92,41 +92,50 @@ def main(urls):
     #         w.writerow(ii)
 
     # create mailchimp list and add members
-    try:
-        list_data = {
-            'name': datetime.datetime.now().strftime('east27-%m-%d-%Y'),
-            'contact': {
-                'company': 'Hamptons Job Board',
-                'address1': 'Main Street',
-                'city': 'East Hampton',
-                'state': 'New York',
-                'zip': '11937',
-                'country': 'USA'
-            },
-            'email_type_option': True,
-            'permission_reminder': 'Hamptons Job Board: Start Listing For Free Today!',
-            'campaign_defaults': {
-                'from_name': 'Hamptons Job Board',
-                'from_email': 'info@hamptonsjobboard.com',
-                'subject': 'Hamptons Job Board',
-                'language': 'English'
-            }
+    # try:
+    list_data = {
+        'name': datetime.datetime.now().strftime('east27-%m-%d-%Y'),
+        'contact': {
+            'company': 'Hamptons Job Board',
+            'address1': 'Main Street',
+            'city': 'East Hampton',
+            'state': 'New York',
+            'zip': '11937',
+            'country': 'USA'
+        },
+        'email_type_option': True,
+        'permission_reminder': 'Hamptons Job Board: Start Listing For Free Today!',
+        'campaign_defaults': {
+            'from_name': 'Hamptons Job Board',
+            'from_email': 'info@hamptonsjobboard.com',
+            'subject': 'Hamptons Job Board',
+            'language': 'English'
         }
+    }
 
-        llist = client.lists.create(data=list_data)
-        for ii in articles:
-            if ii['email']:
-                client.lists.members.create(llist['id'], {
-                    'email_address': ii['email'],
-                    'status': 'subscribed',
-                    'merge_fields': {
-                        'PHONE': ii['phone'],
-                        'ADTITLE': ii['label'],
-                        'PAGETITLE': ii['page_title'] 
-                    },
-                })
-    except Exception as e:
-        pass
+    llist = client.lists.create(data=list_data)
+
+    # create merge fields for the list
+    for ii in ['PAGETITLE', 'ADTITLE']:
+        client.lists.merge_fields.create(list_id=llist['id'], data={
+            'name': ii,
+            'tag': ii,
+            'type': 'text'
+        })
+
+    for ii in articles:
+        if ii['email']:
+            client.lists.members.create(llist['id'], {
+                'email_address': ii['email'],
+                'status': 'subscribed',
+                'merge_fields': {
+                    'PHONE': ii['phone'],
+                    'ADTITLE': ii['label'],
+                    'PAGETITLE': ii['page_title'] 
+                },
+            })
+    # except Exception as e:
+    #     pass
 
     # store in database
     conn = get_db_connection()
@@ -136,7 +145,7 @@ def main(urls):
         columns = ', '.join(articles[0].keys())
         placeholders = ', '.join(['%s'] * len(articles[0]))
 
-        sql = "INSERT INTO ad ( %s ) VALUES ( %s ) ON CONFLICT DO NOTHING" % (columns, placeholders)
+        sql = "INSERT INTO ad ( %s ) VALUES ( %s )" % (columns, placeholders)
         for ii in articles:
             values.append(tuple(ii.values()))
         cursor.executemany(sql, values)
